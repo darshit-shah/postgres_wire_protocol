@@ -1,0 +1,27 @@
+{
+  "name": "postgres_wire_protocol",
+  "version": "1.0.1",
+  "description": "This project is a sample implementation of postgres wire protocol. You can emulate your own postgres server where you can intercept all commands and respond as per your requirement.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/darshit-shah/postgres_wire_protocol.git"
+  },
+  "keywords": [
+    "postgres",
+    "wire",
+    "protocol"
+  ],
+  "dependencies": {
+    "node-sql-parser": "^4.6.6"
+  },
+  "author": "darshit-shah",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/darshit-shah/postgres_wire_protocol/issues"
+  },
+  "homepage": "https://github.com/darshit-shah/postgres_wire_protocol#readme"
+}
