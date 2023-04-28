@@ -1,23 +1,17 @@
 const CommandCodes = require("./command_utils");
 
-function parseAndProcessCommand(socket, commandCode, commandBufferData) {
+function parseAndProcessCommand(socket, commandCode, commandBufferData, length) {
   const { __data } = socket;
-  const matchingCommand = findMatchingCommand(__data.isSSLCompleted, commandCode);
+  const matchingCommand = findMatchingCommand(commandCode, length);
   const commandData = parseCommand(matchingCommand, commandBufferData);
   console.log(commandData);
   __data.commandData = commandData;
   const additionalData = __data.additionalData;
-  if (matchingCommand.command === CommandCodes.ssl.command) {
-    if (__data.isSSLCompleted === true) {
-      throw new Error("ssl request already processed.");
+  if (matchingCommand.command === CommandCodes.startup.command) {
+    if (__data.isStartupCompleted === true) {
+      throw new Error("Startup already called");
     } else {
-      __data.isSSLCompleted = true;
-    }
-  } else if (matchingCommand.command === CommandCodes.init.command) {
-    if (__data.isInitCompleted === true) {
-      throw new Error("Already initialized");
-    } else {
-      __data.isInitCompleted = true;
+      __data.isStartupCompleted = true;
     }
   } else if (matchingCommand.command === CommandCodes.parse.command) {
     additionalData.recordsLength = null;
@@ -28,7 +22,6 @@ function parseAndProcessCommand(socket, commandCode, commandBufferData) {
     catch (ex) {
       additionalData.parsedQuery = null;
     }
-    // console.log(additionalData.parsedQuery);
   } 
   try {
     const response = processCommand(matchingCommand, commandData, additionalData);
@@ -38,9 +31,9 @@ function parseAndProcessCommand(socket, commandCode, commandBufferData) {
     return false;
   } catch (ex) {
     if(ex && ex.message){
-      console.error(ex.message);
+      console.error(ex);
     }
-    const response = processCommand(CommandCodes.error, ex, additionalData);
+    const response = processCommand(CommandCodes.error, ex.message || ex, additionalData);
     if (response) {
       socket.write(response);
     }
@@ -48,15 +41,15 @@ function parseAndProcessCommand(socket, commandCode, commandBufferData) {
   return true;
 }
 
-function findMatchingCommand(isSSLCompleted, commandCode) {
+function findMatchingCommand(commandCode, length) {
   let matchingCommand = null;
-  if (!isSSLCompleted && commandCode === CommandCodes.ssl.code) {
+  if (commandCode === CommandCodes.ssl.code && length === 8) {
     matchingCommand = CommandCodes.ssl;
   } else {
-    if (commandCode === CommandCodes.init.code) {
-      matchingCommand = CommandCodes.init;
-    } else if (commandCode === CommandCodes.startup.code) {
+    if (commandCode === CommandCodes.startup.code) {
       matchingCommand = CommandCodes.startup;
+    } else if (commandCode === CommandCodes.password.code) {
+      matchingCommand = CommandCodes.password;
     }
     else if (commandCode === CommandCodes.parse.code) {
       matchingCommand = CommandCodes.parse;

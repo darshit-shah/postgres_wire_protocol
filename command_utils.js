@@ -16,16 +16,17 @@ function parseParse(data) {
     parameters.push(data.readUInt32BE(offset));
     offset += 4;
   }
+  console.log(properQuery(query));
   return { command: "parse", queryName, query: properQuery(query), parameters };
 }
 
-function parseStartup(data) {
+function parsePassword(data) {
   let offset = 0;
   const MD5 = readStringFromBuffer(data, offset);
-  return { command: "startup", MD5 };
+  return { command: "password", MD5 };
 }
 
-function parseInit(data) {
+function parseStartup(data) {
   let offset = 0;
   const major = data.readUInt16BE(offset);
   offset += 2;
@@ -97,7 +98,7 @@ function parseDescribe(data) {
   offset += value.length + 1;
   const portalType = value[0];
   if (portalType !== 'P' && portalType !== 'S') {
-    throw new Error(`Unknow Portal Type "${value}"`);
+    throw new Error(`Unknown Portal Type "${value}"`);
   }
   const name = value.substring(1);
   return { command: "describe", portalType, name };
@@ -152,24 +153,24 @@ function sendSSLResponse(commandData, additionalData) {
   return 'N';
 }
 
-function sendInitResponse(commandData, additionalData) {
+function sendStartupResponse(commandData, additionalData) {
   return sendAuthenticationOk(3)
 }
 
-function sendStartupResponse(commandData, additionalData) {
+function sendPasswordResponse(commandData, additionalData) {
   return Buffer.concat([
     sendAuthenticationOk(0),
     sendParameterStatusMessage([
-      { key: 'server_version', value: 'Monitor Backend 1.0' },
+      { key: 'server_version', value: '1.0 (Monitor Backend SQL)' },
       { key: 'server_encoding', value: 'UTF8' },
       { key: 'client_encoding', value: 'UTF8' },
       { key: 'DateStyle', value: 'ISO' },
       { key: 'integer_datetimes', value: 'on' },
       { key: 'TimeZone', value: 'Etc/UTC' },
       { key: 'IntervalStyle', value: 'postgres' },
-      { key: 'standard_confirming_strings', value: 'on' }
+      { key: 'standard_conforming_strings', value: 'on' }
     ]),
-    sendBackendKeyData(process.pid, 5679),
+    sendBackendKeyData(additionalData.pid, 5679),
     sendReadyForQuery()
   ])
 }
@@ -189,7 +190,7 @@ function sendBindResponse(commandData, additionalData) {
   return bindBuffer;
 }
 function sendExecuteResponse(commandData, additionalData) {
-  const requiredLength = 4 + (additionalData.recordsLength === null ? 3 : (7 + additionalData.recordsLength.toString().length));
+  const requiredLength = 4 + (additionalData.recordsLength === null ? 3 : (7 + additionalData.recordsLength.toString().length)) + 1;
   const executeBuffer = Buffer.alloc(1 + requiredLength);
   executeBuffer.writeUint8(ResponseCodes.CommandComplete, 0);
   executeBuffer.writeInt32BE(requiredLength, 1); // Length
@@ -287,20 +288,20 @@ function sendFieldDetails(commandData, additionalData) {
   const fieldLength = 4 + 2 + fieldDetails.map(f => (f.name.length + 1 + 18)).reduce((a, c) => a + c, 0);
   const describeBuffer = Buffer.alloc(1 + fieldLength);
   let offset = 0;
-  describeBuffer.writeUint8(ResponseCodes.RowDescriptionMessage, offset);
+  describeBuffer.writeUInt8(ResponseCodes.RowDescriptionMessage, offset);
   offset += 1;
-  describeBuffer.writeInt32BE(fieldLength, offset); // Length
+  describeBuffer.writeUInt32BE(fieldLength, offset); // Length
   offset += 4;
-  describeBuffer.writeInt16BE(fieldDetails.length, offset); // Field Count
+  describeBuffer.writeUInt16BE(fieldDetails.length, offset); // Field Count
   offset += 2;
   fieldDetails.forEach(f => {
     describeBuffer.write(f.name, offset);
     offset += f.name.length + 1;
-    describeBuffer.writeInt32BE(f.tableID, offset);
+    describeBuffer.writeUInt32BE(f.tableID, offset);
     offset += 4;
-    describeBuffer.writeInt16BE(f.columnID, offset);
+    describeBuffer.writeUInt16BE(f.columnID, offset);
     offset += 2;
-    describeBuffer.writeInt32BE(f.dataTypeID, offset);
+    describeBuffer.writeUInt32BE(f.dataTypeID, offset);
     offset += 4;
     describeBuffer.writeInt16BE(f.dataTypeSize, offset);
     offset += 2;
@@ -313,32 +314,55 @@ function sendFieldDetails(commandData, additionalData) {
 }
 
 function sendData(commandData, additionalData) {
-  // const fieldDetails = getFieldDetails(additionalData.rawQuery, additionalData.parsedQuery);
-  const records = getData(additionalData.rawQuery, additionalData.parsedQuery);
+  const fieldDetails = getFieldDetails(additionalData.rawQuery, additionalData.parsedQuery);
+  const records = getData(fieldDetails, additionalData.rawQuery, additionalData.parsedQuery);
   additionalData.recordsLength = records.length;
-  return Buffer.concat(records.map(record => {
-    const recordLength = 4 + 2 + record.map((field) => (field === null ? 4 : (4 + field.length))).reduce((a, c) => a + c, 0);
+  const buffers = records.map((record) => {
+    const recordLength = 4 + 2 + record.map((field, index) => (field === null ? 4 : (4 + (typeof field === 'string' ? field.length : fieldDetails[index].dataTypeSize)))).reduce((a, c) => a + c, 0);
     const recordBuffer = Buffer.alloc(1 + recordLength);
     let offset = 0;
-    recordBuffer.writeUint8(ResponseCodes.DataRow, offset);
+    recordBuffer.writeUInt8(ResponseCodes.DataRow, offset);
     offset += 1;
-    recordBuffer.writeInt32BE(recordLength, offset); // Length
+    recordBuffer.writeUInt32BE(recordLength, offset); // Length
     offset += 4;
-    recordBuffer.writeInt16BE(record.length, offset); // Field Count
+    recordBuffer.writeUInt16BE(record.length, offset); // Field Count
     offset += 2;
     record.forEach((field, index) => {
       if (field === null) {
         recordBuffer.writeInt32BE(-1, offset); // Length
         offset += 4;
       } else {
-        recordBuffer.writeInt32BE(field.length, offset); // Length
-        offset += 4;
-        recordBuffer.write(field, offset); // Length
-        offset += field.length;
+        if (typeof field === 'string') {
+          recordBuffer.writeUInt32BE(field.length, offset); // Length
+          offset += 4;
+          recordBuffer.write(field, offset); // Length
+          offset += field.length;
+        } else {
+          const { dataTypeID, dataTypeSize } = fieldDetails[index];
+          recordBuffer.writeUInt32BE(dataTypeSize, offset); // Length
+          offset += 4;
+          if (dataTypeID === 23) {
+            recordBuffer.writeInt32BE(field, offset);
+            offset += 4;
+          } else if (dataTypeID === 20) {
+            recordBuffer.writeBigInt64BE(field, offset);
+            offset += 8;
+          } else if (dataTypeID === 700) {
+            recordBuffer.writeFloatBE(field, offset)
+            offset += 4;
+          } else if (dataTypeID === 701) {
+            recordBuffer.writeDoubleBE(field, offset);
+            offset += 8;
+          }
+          else {
+            throw new Error(`Datatype id "${dataTypeID}" is not handled.`)
+          }
+        }
       }
     });
     return recordBuffer;
-  }));
+  });
+  return Buffer.concat(buffers);
 }
 
 function sendError(error) {
@@ -423,8 +447,8 @@ const ResponseCodes = {
 
 const CommandCodes = {
   ssl: { code: 0, command: "ssl", parseCommand: parseSSL, sendResponse: sendSSLResponse },
-  init: { code: 0, command: "init", parseCommand: parseInit, sendResponse: sendInitResponse },
-  startup: { code: 112, command: "startup", parseCommand: parseStartup, sendResponse: sendStartupResponse },
+  startup: { code: 0, command: "startup", parseCommand: parseStartup, sendResponse: sendStartupResponse },
+  password: { code: 112, command: "password", parseCommand: parsePassword, sendResponse: sendPasswordResponse },
   query: { code: 81, command: "query", parseCommand: parseQuery, sendResponse: sendQueryResponse },
   parse: { code: 80, command: "parse", parseCommand: parseParse, sendResponse: sendParseResponse },
   bind: { code: 66, command: "bind", parseCommand: parseBind, sendResponse: sendBindResponse },
